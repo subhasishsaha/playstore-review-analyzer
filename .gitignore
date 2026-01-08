@@ -1,6 +1,0 @@
-.env
-Models/
-.ipynb_checkpoints/
-score.py
-.venv/
-test.py
