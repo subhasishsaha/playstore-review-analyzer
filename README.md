@@ -32,7 +32,6 @@ An advanced NLP-powered application to scrape, analyze, and derive actionable in
 ├── app.py                               # Main Streamlit Application
 ├── LICENSE
 ├── requirements.txt                     # Python dependencies
-├── test.py
 └── update_local_model.py
 ```
 ## Installation
