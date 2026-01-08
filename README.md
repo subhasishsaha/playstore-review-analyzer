@@ -92,7 +92,9 @@ The project employs a multi-stage NLP pipeline:
 
 - **Sentiment Analysis**: A customized PyTorch architecture utilizing FacebookAI/roberta-base was fine-tuned to detect sentiment nuances in app reviews.
 
-- **Recommendation Engine**: Negative reviews are grouped by their predicted tags. These clusters are fed into Google Gemini-2.5-flash to generate summarized, technical suggestions for app developers.
+- **Recommendation Engine**: Negative reviews are grouped by their predicted tags. These clusters are fed into Google Gemini-1.5-flash to generate summarized, technical suggestions for app developers.
+
+**NOTE:** At the time of creating this, gemini 1.5 flash was available. You may need to change the Gemini Model to use the Recommendation Engine.
 
 ## Usage
 
