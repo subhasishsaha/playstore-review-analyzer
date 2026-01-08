@@ -1,10 +1,6 @@
 .env
 Models/
 .ipynb_checkpoints/
-config.json
-initialize.py
-deploy_model.py
 score.py
 .venv/
-Models_Azure/
-.gitignore
+test.py
