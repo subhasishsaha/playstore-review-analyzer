@@ -29,7 +29,6 @@ An advanced NLP-powered application to scrape, analyze, and derive actionable in
 │   ├── multi-label-classification-using-ensemble-approach.ipynb # Ensemble training
 │   └── suggestion-using-gemini.ipynb    # GenAI experimentation
 ├── Models/                              # Directory for saved models (Created after training)
-├── .gitignore
 ├── app.py                               # Main Streamlit Application
 ├── LICENSE
 ├── requirements.txt                     # Python dependencies
