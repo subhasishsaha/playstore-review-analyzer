@@ -28,7 +28,7 @@ An advanced NLP-powered application to scrape, analyze, and derive actionable in
 │   ├── initial-multi-labelling-using-bart-large.ipynb       # Zero-shot labeling
 │   ├── multi-label-classification-using-ensemble-approach.ipynb # Ensemble training
 │   └── suggestion-using-gemini.ipynb    # GenAI experimentation
-├── Models/                              # Directory for saved models (Created after training)
+├── Models/                              # Directory for saved models 
 ├── app.py                               # Main Streamlit Application
 ├── LICENSE
 ├── requirements.txt                     # Python dependencies
@@ -56,7 +56,7 @@ An advanced NLP-powered application to scrape, analyze, and derive actionable in
     ```
 - **Generate/Download Models**
 
-    ***Note**: The repository structure provided does not contain the trained model binaries (due to size). You must run the notebooks to generate them before running the app.*
+    ***Note**: The repository now contains all the models required. You can use the models given, or run the notebook file to generate the models. You can execute the steps given below to generate the models.*
 
     - **Labeling Model**: Run multi-label-classification-using-ensemble-approach.ipynb to generate:
 
