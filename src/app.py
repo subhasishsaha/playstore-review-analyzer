@@ -1,4 +1,4 @@
-import streamlit as st
+import gradio as gr
 import pandas as pd
 import numpy as np
 import re
@@ -19,25 +19,18 @@ from dotenv import load_dotenv
 import os
 from huggingface_hub import hf_hub_download
 
+# --- Configuration & Setup ---
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    st.error("GEMINI_API_KEY not found. Please add it to your .env file.")
-    st.stop()
+    raise ValueError("GEMINI_API_KEY not found. Please add it to your .env file or Secrets.")
 else:
     genai.configure(api_key=GEMINI_API_KEY)
 
-
-st.set_page_config(page_title="Play Store Review Analyzer", page_icon="📱", layout="centered")
-
-@st.cache_resource
+# --- Resource Loading (Cached Globally) ---
 def load_resources():
     try:
-        # --- 1. Download Custom Helper Models from YOUR Hub ---
-        # Note: We assume the 'Models' folder contents are at the root of your HF repo.
-        # If your HF repo structure is different, adjust the 'filename' argument.
-        
         repo_id = "ssaha007/playstore-models"
         
         # Download paths
@@ -46,27 +39,24 @@ def load_resources():
         tfidf_path = hf_hub_download(repo_id=repo_id, filename="ensemble_models/tfidf.pkl")
         weights_path = hf_hub_download(repo_id=repo_id, filename="sentiment_model/best_model_state.bin")
 
-        # Load them
+        # Load Models
         mlb = joblib.load(mlb_path)
         ensemble = joblib.load(ensemble_path)
         tfidf = joblib.load(tfidf_path)
         
-        # --- 2. Load Base Tokenizer & Architecture ---
-        # We use the standard Hugging Face "roberta-base" for the structure/config
+        # Load Architecture
         tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 
         class Sentiment_Classifier(nn.Module):
             def __init__(self, n_classes):
                 super(Sentiment_Classifier, self).__init__()
                 self.roberta = AutoModel.from_pretrained("roberta-base")
-                
-                # Freeze/Unfreeze layers as per your training logic
+                # Freeze/Unfreeze logic
                 for param in self.roberta.parameters():
                     param.requires_grad = False
                 for layer in self.roberta.encoder.layer[-2:]:
                     for param in layer.parameters():
-                        param.requires_grad = True
-                        
+                        param.requires_grad = True       
                 self.drop = nn.Dropout(p=0.1)
                 self.out = nn.Linear(self.roberta.config.hidden_size, n_classes)
 
@@ -78,28 +68,22 @@ def load_resources():
                 return output
     
         model = Sentiment_Classifier(n_classes = 2)
-
-        # --- 3. Load YOUR Custom Weights ---
-        # This overwrites the generic roberta-base weights with your fine-tuned ones
         model.load_state_dict(torch.load(weights_path, map_location="cpu"))
         model.eval()
         
         return mlb, ensemble, tfidf, tokenizer, model
 
     except Exception as e:
-        st.error(f"An error occurred while loading resources from Hugging Face: {e}")
-        st.stop()
+        raise RuntimeError(f"Failed to load resources: {e}")
 
-
-try:
-    mlb, ensemble, tfidf, tokenizer, model = load_resources()
-except Exception as e:
-    st.error(f"An error occurred during app initialization: {e}")
-    st.stop()
+# Load resources once at startup
+print("⏳ Loading models...")
+mlb, ensemble, tfidf, tokenizer, model = load_resources()
+print("✅ Models loaded.")
     
 softmax = nn.Softmax(dim=1)
 
-# === Text Processing ===
+# --- Helper Functions ---
 def preprocess(text):
     text = emoji.replace_emoji(text or "", "")
     text = re.sub(r"http\S+|www\S+|<.*?>|\n|\w*\d\w*", '', text).strip()
@@ -160,227 +144,159 @@ def prepare_label_to_reviews(df, max_reviews_per_label=10):
 
 def generate_gemini_suggestions(label_to_reviews, model_name="gemini-1.5-flash", max_reviews=3):
     model_gemini = genai.GenerativeModel(model_name)
-    suggestions = {}
+    formatted_suggestions = ""
+    
     for label, reviews in label_to_reviews.items():
         if not reviews:
             continue
         prompt = f"""You are an AI assistant. Based on the following negative reviews about the category '{label}', suggest actionable improvements:\n\n{chr(10).join('- ' + r for r in reviews[:max_reviews])}"""
         try:
             response = model_gemini.generate_content(prompt)
-            suggestions[label] = response.text.strip()
+            suggestion_text = response.text.strip()
+            # Format as Markdown for Gradio
+            formatted_suggestions += f"### Suggestions for: **{label.title()}**\n{suggestion_text}\n\n---\n\n"
         except Exception as e:
-            suggestions[label] = f"⚠️ Error generating suggestions: {e}"
-    return suggestions
+            formatted_suggestions += f"### {label.title()}\n⚠️ Error: {e}\n\n"
+            
+    if not formatted_suggestions:
+        return "No actionable negative reviews found to generate suggestions."
+    return formatted_suggestions
 
-# === Visualization (Updated with Plotly) ===
-def display_visualizations(df):
-    st.subheader("Visualizations")
-    viz_option = st.selectbox("🧭 Select a Visualization Type", 
-                              ["Label Distribution", "Sentiment Distribution", "Sentiment by Category", "Sentiment by App Version", "Word Cloud"])
+# --- Core Logic Wrapper ---
+def analyze_reviews(app_id, sort_order, count):
+    if not app_id:
+        raise gr.Error("Please enter a valid App ID.")
 
-    st.markdown("---")
+    try:
+        # 1. Fetch
+        sort_map = {'Newest': Sort.NEWEST, 'Most Relevant': Sort.MOST_RELEVANT}
+        result, _ = reviews(app_id, sort=sort_map[sort_order], count=int(count), lang="en", country="us")
+        
+        if not result:
+            raise gr.Error("No reviews fetched. Check App ID.")
+        
+        df = pd.DataFrame(result)
 
-    if viz_option == "Label Distribution":
-        st.subheader("📊 Label Distribution")
+        # 2. Process
+        df_processed = df.copy()
+        df_processed["content_processed"] = df_processed["content"].apply(preprocess)
+        df_processed.dropna(subset=['content_processed'], inplace=True)
+        
+        if not df_processed.empty:
+            df_processed["content_processed"] = df_processed["content_processed"].apply(filter_english_sentences)
+            df_processed.dropna(subset=['content_processed'], inplace=True)
+
+        if df_processed.empty:
+            raise gr.Error("No valid English content found.")
+
+        texts = df_processed["content_processed"].tolist()
+        df_processed["labels"] = get_labels_batch(texts)
+        df_processed["sentiment"] = predict_sentiments(texts)
+        
+        df = df.merge(df_processed[['reviewId', 'sentiment', 'labels']], on='reviewId', how='right')
+        df.reset_index(drop=True, inplace=True)
+
+        # 3. Generate Suggestions
+        label_to_reviews = prepare_label_to_reviews(df)
+        suggestions_md = generate_gemini_suggestions(label_to_reviews)
+
+        # Return: Dataframe (for display), Dataframe (for State), Suggestions
+        display_cols = ['userName', 'content', 'at', 'appVersion', 'sentiment', 'labels']
+        return df[display_cols], df, suggestions_md
+
+    except Exception as e:
+        raise gr.Error(f"Analysis Failed: {str(e)}")
+
+# --- Visualization Logic ---
+def update_visualization(df, viz_type, selected_cat=None, selected_ver=None):
+    if df is None or df.empty:
+        return None
+
+    if viz_type == "Label Distribution":
         all_labels = df["labels"].explode().dropna()
-        if not all_labels.empty:
-            label_counts = all_labels.value_counts().reset_index()
-            label_counts.columns = ['Label', 'Count']
-            fig = px.bar(label_counts, 
-                         x='Count', 
-                         y='Label', 
-                         orientation='h',
-                         title="Distribution of Review Labels",
-                         color='Count',
-                         color_continuous_scale=px.colors.sequential.Magma,
-                         labels={'Label': 'Category', 'Count': 'Number of Reviews'})
-            fig.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No labels to display.")
+        if all_labels.empty: return None
+        label_counts = all_labels.value_counts().reset_index()
+        label_counts.columns = ['Label', 'Count']
+        fig = px.bar(label_counts, x='Count', y='Label', orientation='h',
+                     title="Distribution of Review Labels", color='Count',
+                     color_continuous_scale=px.colors.sequential.Magma)
+        fig.update_layout(yaxis={'categoryorder':'total ascending'})
+        return fig
 
-    elif viz_option == "Sentiment Distribution":
-        st.subheader("💬 Overall Sentiment Distribution")
-        if not df["sentiment"].empty:
-            sentiment_counts = df['sentiment'].value_counts()
-            fig = px.pie(values=sentiment_counts.values, 
-                         names=sentiment_counts.index,
-                         title="Overall Distribution of Sentiments",
-                         color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'},
-                         hole=0.3)
-            fig.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No sentiment data to display.")
+    elif viz_type == "Sentiment Distribution":
+        sentiment_counts = df['sentiment'].value_counts()
+        fig = px.pie(values=sentiment_counts.values, names=sentiment_counts.index,
+                     title="Overall Sentiment Distribution", hole=0.3,
+                     color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
+        return fig
 
-    elif viz_option == "Sentiment by Category":
-        st.subheader("📊 Sentiment Distribution per Category")
-        exploded_df = df.explode('labels')
-        unique_labels = sorted(exploded_df[exploded_df['labels'] != 'unknown']['labels'].unique())
+    elif viz_type == "Word Cloud":
+        # Note: Gradio needs a Matplotlib Figure object, not pyplot state
+        text_data = df[df["sentiment"] == "Negative"]["content"].dropna() # Default to negative for impact
+        if text_data.empty: return None
+        text = " ".join(text_data.tolist())
+        wordcloud = WordCloud(width=800, height=400, background_color="white", collocations=False).generate(text)
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation="bilinear")
+        ax.axis("off")
+        return fig
 
-        if not unique_labels:
-            st.info("No specific categories were identified in the reviews to analyze.")
-        else:
-            selected_label = st.selectbox("Choose a category to analyze:", options=unique_labels)
+    # For dropdown logic, we can just return the label distribution as default 
+    # or expand this function to accept specific inputs if we add more UI controls.
+    return None
+
+# --- Gradio UI ---
+with gr.Blocks(title="Play Store Review Analyzer") as demo:
+    gr.Markdown("# 📱 Play Store Review Analyzer")
+    
+    # Store the full dataframe in a hidden state component
+    df_state = gr.State()
+
+    with gr.Row():
+        app_id_input = gr.Textbox(label="App ID", placeholder="e.g., com.google.android.gm")
+        sort_input = gr.Dropdown(["Most Relevant", "Newest"], label="Sort Order", value="Most Relevant")
+        count_input = gr.Number(label="Review Count", value=100, step=10)
+    
+    analyze_btn = gr.Button("🚀 Fetch & Analyze", variant="primary")
+
+    with gr.Tabs():
+        with gr.TabItem("📊 Data"):
+            data_output = gr.Dataframe(label="Analyzed Reviews", headers=['userName', 'content', 'at', 'appVersion', 'sentiment', 'labels'])
+        
+        with gr.TabItem("💡 Suggestions"):
+            suggestions_output = gr.Markdown()
             
-            if selected_label:
-                label_df = exploded_df[exploded_df['labels'] == selected_label]
-                sentiment_counts = label_df['sentiment'].value_counts()
-                
-                if not sentiment_counts.empty:
-                    fig = px.pie(values=sentiment_counts.values, 
-                                 names=sentiment_counts.index,
-                                 title=f"Sentiments for '{selected_label.title()}'",
-                                 hole=0.3,
-                                 color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
-                    fig.update_traces(textposition='inside', textinfo='percent+label')
-                    fig.update_layout(showlegend=True)
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.write("No sentiment data to display for this category.")
+        with gr.TabItem("🧭 Visualizations"):
+            with gr.Row():
+                viz_dropdown = gr.Dropdown(
+                    ["Label Distribution", "Sentiment Distribution", "Word Cloud"], 
+                    label="Select Visualization", 
+                    value="Label Distribution"
+                )
+            viz_output = gr.Plot(label="Visualization")
 
-    elif viz_option == "Sentiment by App Version":
-        st.subheader("📊 Sentiment Distribution by App Version")
-        if 'appVersion' in df.columns and not df['appVersion'].isnull().all():
-            unique_versions = sorted(df['appVersion'].dropna().unique())
+    # Event: Click Analyze
+    analyze_btn.click(
+        fn=analyze_reviews,
+        inputs=[app_id_input, sort_input, count_input],
+        outputs=[data_output, df_state, suggestions_output]
+    )
 
-            if not unique_versions:
-                st.info("No specific app versions were found in the data.")
-            else:
-                selected_version = st.selectbox("Choose an app version to analyze:", options=unique_versions)
-                
-                if selected_version:
-                    version_df = df[df['appVersion'] == selected_version]
-                    sentiment_counts = version_df['sentiment'].value_counts()
-                    
-                    if not sentiment_counts.empty:
-                        fig = px.pie(values=sentiment_counts.values, 
-                                     names=sentiment_counts.index,
-                                     title=f"Sentiments for Version '{selected_version}'",
-                                     hole=0.3,
-                                     color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
-                        fig.update_traces(textposition='inside', textinfo='percent+label')
-                        fig.update_layout(showlegend=True)
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.write(f"No sentiment data to display for version {selected_version}.")
-        else:
-            st.info("App version data is not available in the fetched reviews.")
-
-    elif viz_option == "Word Cloud":
-        st.subheader("☁️ Word Cloud")
-        sentiment = st.selectbox("Choose Sentiment", ["Positive", "Negative"])
-        text_data = df[df["sentiment"] == sentiment]["content"].dropna()
-        if not text_data.empty:
-            text = " ".join(text_data.tolist())
-            with st.spinner("Generating word cloud..."):
-                wordcloud = WordCloud(width=800, height=400, background_color="white", collocations=False).generate(text)
-                fig, ax = plt.subplots(figsize=(10, 5))
-                ax.imshow(wordcloud, interpolation="bilinear")
-                ax.axis("off")
-                st.pyplot(fig)
-        else:
-            st.info(f"No text available for {sentiment} sentiment.")
-
-# === Streamlit App ===
-def main():
-
-    st.title("Play Store Review Analyzer 📱")
-
-    # --- FIX 1: Initialize session state for suggestions ---
-    if 'review_df' not in st.session_state:
-        st.session_state['review_df'] = pd.DataFrame()
-    if 'gemini_suggestions' not in st.session_state:
-        st.session_state['gemini_suggestions'] = None
-
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        st.subheader("⚙️ Analysis Controls")
-        app_id = st.text_input("Enter App ID (e.g., com.google.android.gm):")
-        sort_order = st.selectbox("Sort Order:", ["Most Relevant", "Newest"])
-        count = st.number_input("Number of Reviews:", min_value=10, max_value=1000, value=100, step=10)
-
-        if st.button("🚀 Fetch & Analyze Reviews"):
-            if not app_id:
-                st.error("Please enter a valid App ID.")
-                return
-
-            try:
-                with st.spinner("Fetching reviews... This might take a moment."):
-                    sort_map = {'Newest': Sort.NEWEST, 'Most Relevant': Sort.MOST_RELEVANT}
-                    result, _ = reviews(app_id, sort=sort_map[sort_order], count=count, lang="en", country="us")
-                    if not result:
-                        st.warning("No reviews fetched. The app may have no reviews or the ID could be incorrect.")
-                        return
-                    df = pd.DataFrame(result)
-                
-                with st.spinner("Analyzing content..."):
-                    df_processed = df.copy()
-                    df_processed["content_processed"] = df_processed["content"].apply(preprocess)
-                    df_processed.dropna(subset=['content_processed'], inplace=True)
-                    
-                    if not df_processed.empty:
-                        df_processed["content_processed"] = df_processed["content_processed"].apply(filter_english_sentences)
-                        df_processed.dropna(subset=['content_processed'], inplace=True)
-
-                    if df_processed.empty:
-                        st.warning("No valid English content found after preprocessing.")
-                        st.session_state['review_df'] = pd.DataFrame()
-                        # --- FIX 2: Clear previous suggestions on new analysis ---
-                        st.session_state['gemini_suggestions'] = None 
-                        return
-
-                    texts = df_processed["content_processed"].tolist()
-                    df_processed["labels"] = get_labels_batch(texts)
-                    df_processed["sentiment"] = predict_sentiments(texts)
-                    
-                    df = df.merge(df_processed[['reviewId', 'sentiment', 'labels']], on='reviewId', how='right')
-                    df.reset_index(drop=True, inplace=True)
-                
-                st.success("✅ Analysis Complete!")
-                st.session_state['review_df'] = df
-
-                # --- FIX 3: Generate and store suggestions only ONCE after analysis ---
-                with st.spinner("Generating suggestions..."):
-                    label_to_reviews = prepare_label_to_reviews(df)
-                    if label_to_reviews:
-                        st.session_state['gemini_suggestions'] = generate_gemini_suggestions(label_to_reviews)
-                    else:
-                        st.session_state['gemini_suggestions'] = {}
-            
-            except Exception as e:
-                st.error(f"An error occurred during analysis: {e}")
-
-    with col2:
-        if not st.session_state.get('review_df', pd.DataFrame()).empty:
-            df_display = st.session_state['review_df']
-            
-            st.subheader("📊 Analysis Results")
-            st.dataframe(df_display[['userName', 'content', 'at', 'appVersion', 'sentiment', 'labels']], height=300, use_container_width=True)
-
-            st.markdown("---")
-            
-            st.subheader("💡 Gemini Suggestions (for Negative Reviews)")
-            # --- FIX 4: Display suggestions from session state instead of regenerating ---
-            suggestions = st.session_state.get('gemini_suggestions')
-
-            if suggestions: # Checks if dict is not None and not empty
-                for label, suggestion in suggestions.items():
-                    with st.expander(f"Suggestions for: **{label.title()}**"):
-                        st.markdown(suggestion)
-            elif suggestions is not None: 
-                st.info("No actionable negative reviews found to generate suggestions.")
-
-        else:
-            st.info("⬅️ Enter an App ID and click 'Fetch & Analyze Reviews' to begin.")
-
-    st.markdown("<hr>", unsafe_allow_html=True)
-    if not st.session_state.get('review_df', pd.DataFrame()).empty:
-        display_visualizations(st.session_state['review_df'])
-    else:
-        st.info("Run an analysis to see visualizations here.")
-
+    # Event: Change Visualization Dropdown (or when data loads)
+    # We chain this so it triggers after analysis or when user changes dropdown
+    viz_dropdown.change(
+        fn=update_visualization,
+        inputs=[df_state, viz_dropdown],
+        outputs=[viz_output]
+    )
+    
+    # Also update viz when analysis finishes (default view)
+    analyze_btn.click(
+        fn=update_visualization,
+        inputs=[df_state, viz_dropdown],
+        outputs=[viz_output]
+    )
 
 if __name__ == "__main__":
-    main()
+    demo.launch()
