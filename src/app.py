@@ -142,7 +142,7 @@ def prepare_label_to_reviews(df, max_reviews_per_label=10):
                 label_to_reviews[clean].append(row["content"])
     return {k: list(dict.fromkeys(v))[:max_reviews_per_label] for k, v in label_to_reviews.items()}
 
-def generate_gemini_suggestions(label_to_reviews, model_name="gemini-1.5-flash", max_reviews=3):
+def generate_gemini_suggestions(label_to_reviews, model_name="gemini-2.5-flash-lite", max_reviews=3):
     model_gemini = genai.GenerativeModel(model_name)
     formatted_suggestions = ""
     
