@@ -232,15 +232,31 @@ def update_viz_controls(viz_type, df):
 
 def update_visualization(df, viz_type, param_selection):
     """
-    Generates the plot. Includes Fallback Logic to prevent blank graphs.
+    Generates the plot. Includes fix for Tuple/List mismatch and blank graphs.
     """
+    # --- Helper to create a "No Data" message plot ---
+    def create_error_plot(message):
+        fig = px.bar(x=[0], y=[0])
+        fig.update_layout(
+            xaxis={"visible": False}, 
+            yaxis={"visible": False}, 
+            annotations=[{
+                "text": message, 
+                "xref": "paper", "yref": "paper", 
+                "showarrow": False, "font": {"size": 20}
+            }]
+        )
+        return fig
+
     if df is None or df.empty:
-        return None
+        return create_error_plot("Please fetch reviews first.")
 
     # 1. Label Distribution
     if viz_type == "Label Distribution":
         all_labels = df["labels"].explode().dropna()
-        if all_labels.empty: return None
+        if all_labels.empty: 
+            return create_error_plot("No labels found in these reviews.")
+            
         label_counts = all_labels.value_counts().reset_index()
         label_counts.columns = ['Label', 'Count']
         fig = px.bar(label_counts, x='Count', y='Label', orientation='h',
@@ -251,27 +267,37 @@ def update_visualization(df, viz_type, param_selection):
 
     # 2. Overall Sentiment
     elif viz_type == "Sentiment Distribution":
+        if 'sentiment' not in df.columns:
+            return create_error_plot("Sentiment data missing.")
+            
         sentiment_counts = df['sentiment'].value_counts()
         fig = px.pie(values=sentiment_counts.values, names=sentiment_counts.index,
                      title="Overall Sentiment Distribution", hole=0.3,
                      color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
         return fig
 
-    # 3. Sentiment by Label (FIXED)
+    # 3. Sentiment by Label (CRITICAL FIX HERE)
     elif viz_type == "Sentiment by Label":
-        # SAFETY FALLBACK: If param_selection is None (UI lag), pick the first valid label automatically
         if not param_selection:
             unique_labels = get_unique_labels(df)
             if unique_labels:
                 param_selection = unique_labels[0]
             else:
-                return None
+                return create_error_plot("No categories found to analyze.")
         
-        mask = df['labels'].apply(lambda x: param_selection in x if isinstance(x, list) else False)
+        # FIX: Check for both list AND tuple, or string fallback
+        def has_label(row_labels, target):
+            if isinstance(row_labels, (list, tuple)):
+                return target in row_labels
+            elif isinstance(row_labels, str):
+                return target in row_labels # Handle case if data became string
+            return False
+
+        mask = df['labels'].apply(lambda x: has_label(x, param_selection))
         filtered_df = df[mask]
         
         if filtered_df.empty:
-            return None
+            return create_error_plot(f"No reviews found for '{param_selection}'")
 
         sentiment_counts = filtered_df['sentiment'].value_counts()
         fig = px.pie(values=sentiment_counts.values, names=sentiment_counts.index,
@@ -279,28 +305,30 @@ def update_visualization(df, viz_type, param_selection):
                      color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
         return fig
 
-    # 4. Word Cloud (FIXED)
+    # 4. Word Cloud
     elif viz_type == "Word Cloud":
-        # SAFETY FALLBACK: Default to "Positive" if None
         target_sentiment = param_selection if param_selection else "Positive"
         
         text_data = df[df["sentiment"] == target_sentiment]["content"].dropna()
-        if text_data.empty: return None
+        if text_data.empty: 
+            fig, ax = plt.subplots(figsize=(10, 2))
+            ax.text(0.5, 0.5, f"No {target_sentiment} reviews found.", 
+                    horizontalalignment='center', verticalalignment='center', fontsize=12)
+            ax.axis("off")
+            return fig
         
         text = " ".join(text_data.tolist())
         cmap = "Greens" if target_sentiment == "Positive" else "Reds"
         
-        # Explicitly create figure to avoid thread issues
         wordcloud = WordCloud(width=800, height=400, background_color="white", colormap=cmap, collocations=False).generate(text)
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.imshow(wordcloud, interpolation="bilinear")
         ax.axis("off")
         ax.set_title(f"{target_sentiment} Word Cloud")
-        plt.close(fig) # Clean up memory reference
+        plt.close(fig) 
         return fig
 
-    return None
-
+    return create_error_plot("Select a visualization type.")
 # --- Gradio UI ---
 with gr.Blocks(title="Play Store Review Analyzer") as demo:
     gr.Markdown("# 📱 Play Store Review Analyzer")
