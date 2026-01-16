@@ -24,7 +24,8 @@ load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found. Please add it to your .env file or Secrets.")
+    # Just a warning so it doesn't crash on local if not set immediately
+    print("⚠️ GEMINI_API_KEY not found. AI suggestions will not work.")
 else:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -51,7 +52,6 @@ def load_resources():
             def __init__(self, n_classes):
                 super(Sentiment_Classifier, self).__init__()
                 self.roberta = AutoModel.from_pretrained("roberta-base")
-                # Freeze/Unfreeze logic
                 for param in self.roberta.parameters():
                     param.requires_grad = False
                 for layer in self.roberta.encoder.layer[-2:]:
@@ -76,7 +76,6 @@ def load_resources():
     except Exception as e:
         raise RuntimeError(f"Failed to load resources: {e}")
 
-# Load resources once at startup
 print("⏳ Loading models...")
 mlb, ensemble, tfidf, tokenizer, model = load_resources()
 print("✅ Models loaded.")
@@ -143,6 +142,9 @@ def prepare_label_to_reviews(df, max_reviews_per_label=10):
     return {k: list(dict.fromkeys(v))[:max_reviews_per_label] for k, v in label_to_reviews.items()}
 
 def generate_gemini_suggestions(label_to_reviews, model_name="gemini-2.5-flash-lite", max_reviews=3):
+    if not GEMINI_API_KEY:
+        return "⚠️ Gemini API Key missing. Skipping suggestions."
+    
     model_gemini = genai.GenerativeModel(model_name)
     formatted_suggestions = ""
     
@@ -153,7 +155,6 @@ def generate_gemini_suggestions(label_to_reviews, model_name="gemini-2.5-flash-l
         try:
             response = model_gemini.generate_content(prompt)
             suggestion_text = response.text.strip()
-            # Format as Markdown for Gradio
             formatted_suggestions += f"### Suggestions for: **{label.title()}**\n{suggestion_text}\n\n---\n\n"
         except Exception as e:
             formatted_suggestions += f"### {label.title()}\n⚠️ Error: {e}\n\n"
@@ -161,6 +162,16 @@ def generate_gemini_suggestions(label_to_reviews, model_name="gemini-2.5-flash-l
     if not formatted_suggestions:
         return "No actionable negative reviews found to generate suggestions."
     return formatted_suggestions
+
+def get_unique_labels(df):
+    """Extracts unique labels from the dataframe for the dropdown."""
+    if df is None or df.empty:
+        return []
+    # Explode the lists of labels into a single series
+    all_labels = df["labels"].explode().dropna()
+    # Filter out 'unknown' and get unique values sorted
+    unique = sorted(list(set([l for l in all_labels if l != 'unknown'])))
+    return unique
 
 # --- Core Logic Wrapper ---
 def analyze_reviews(app_id, sort_order, count):
@@ -200,7 +211,7 @@ def analyze_reviews(app_id, sort_order, count):
         label_to_reviews = prepare_label_to_reviews(df)
         suggestions_md = generate_gemini_suggestions(label_to_reviews)
 
-        # Return: Dataframe (for display), Dataframe (for State), Suggestions
+        # Return: Dataframe (display), Dataframe (state), Suggestions
         display_cols = ['userName', 'content', 'at', 'appVersion', 'sentiment', 'labels']
         return df[display_cols], df, suggestions_md
 
@@ -208,10 +219,34 @@ def analyze_reviews(app_id, sort_order, count):
         raise gr.Error(f"Analysis Failed: {str(e)}")
 
 # --- Visualization Logic ---
-def update_visualization(df, viz_type, selected_cat=None, selected_ver=None):
+
+def update_viz_controls(viz_type, df):
+    """
+    Dynamically updates the 'Options' dropdown based on the selected Visualization Type.
+    """
+    if df is None or df.empty:
+        return gr.update(visible=False)
+
+    if viz_type == "Sentiment by Label":
+        # Populate with actual labels from the analysis
+        labels = get_unique_labels(df)
+        if not labels:
+             return gr.update(visible=False)
+        return gr.update(label="Select Label", choices=labels, value=labels[0], visible=True)
+
+    elif viz_type == "Word Cloud":
+        # Populate with Sentiment options
+        return gr.update(label="Select Sentiment", choices=["Positive", "Negative"], value="Positive", visible=True)
+
+    else:
+        # Hide for other charts that don't need extra input
+        return gr.update(visible=False)
+
+def update_visualization(df, viz_type, param_selection):
     if df is None or df.empty:
         return None
 
+    # 1. Label Distribution (Bar Chart)
     if viz_type == "Label Distribution":
         all_labels = df["labels"].explode().dropna()
         if all_labels.empty: return None
@@ -223,6 +258,7 @@ def update_visualization(df, viz_type, selected_cat=None, selected_ver=None):
         fig.update_layout(yaxis={'categoryorder':'total ascending'})
         return fig
 
+    # 2. Overall Sentiment Distribution (Pie Chart)
     elif viz_type == "Sentiment Distribution":
         sentiment_counts = df['sentiment'].value_counts()
         fig = px.pie(values=sentiment_counts.values, names=sentiment_counts.index,
@@ -230,20 +266,44 @@ def update_visualization(df, viz_type, selected_cat=None, selected_ver=None):
                      color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
         return fig
 
+    # 3. Sentiment by Label (Pie Chart for specific label)
+    elif viz_type == "Sentiment by Label":
+        if not param_selection:
+            return None # Waiting for selection
+        
+        # Filter dataframe for reviews containing this label
+        # (Labels are lists, so we need to check existence)
+        mask = df['labels'].apply(lambda x: param_selection in x if isinstance(x, list) else False)
+        filtered_df = df[mask]
+        
+        if filtered_df.empty:
+            return None
+
+        sentiment_counts = filtered_df['sentiment'].value_counts()
+        fig = px.pie(values=sentiment_counts.values, names=sentiment_counts.index,
+                     title=f"Sentiment Distribution for '{param_selection}'", hole=0.3,
+                     color_discrete_map={'Positive': 'mediumseagreen', 'Negative': 'indianred'})
+        return fig
+
+    # 4. Word Cloud (Image)
     elif viz_type == "Word Cloud":
-        # Note: Gradio needs a Matplotlib Figure object, not pyplot state
-        text_data = df[df["sentiment"] == "Negative"]["content"].dropna() # Default to negative for impact
+        target_sentiment = param_selection if param_selection else "Positive"
+        
+        text_data = df[df["sentiment"] == target_sentiment]["content"].dropna()
         if text_data.empty: return None
+        
         text = " ".join(text_data.tolist())
-        wordcloud = WordCloud(width=800, height=400, background_color="white", collocations=False).generate(text)
+        # Color map based on sentiment
+        cmap = "Greens" if target_sentiment == "Positive" else "Reds"
+        
+        wordcloud = WordCloud(width=800, height=400, background_color="white", colormap=cmap, collocations=False).generate(text)
         
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.imshow(wordcloud, interpolation="bilinear")
         ax.axis("off")
+        ax.set_title(f"{target_sentiment} Word Cloud")
         return fig
 
-    # For dropdown logic, we can just return the label distribution as default 
-    # or expand this function to accept specific inputs if we add more UI controls.
     return None
 
 # --- Gradio UI ---
@@ -269,32 +329,54 @@ with gr.Blocks(title="Play Store Review Analyzer") as demo:
             
         with gr.TabItem("🧭 Visualizations"):
             with gr.Row():
+                # Main Viz Selector
                 viz_dropdown = gr.Dropdown(
-                    ["Label Distribution", "Sentiment Distribution", "Word Cloud"], 
+                    ["Label Distribution", "Sentiment Distribution", "Sentiment by Label", "Word Cloud"], 
                     label="Select Visualization", 
                     value="Label Distribution"
                 )
+                # Dynamic Sub-Option Selector (Hidden by default)
+                viz_param = gr.Dropdown(
+                    label="Options", 
+                    visible=False
+                )
+            
             viz_output = gr.Plot(label="Visualization")
 
-    # Event: Click Analyze
+    # --- Interaction Logic ---
+
+    # 1. Analyze Button Click
     analyze_btn.click(
         fn=analyze_reviews,
         inputs=[app_id_input, sort_input, count_input],
         outputs=[data_output, df_state, suggestions_output]
-    )
-
-    # Event: Change Visualization Dropdown (or when data loads)
-    # We chain this so it triggers after analysis or when user changes dropdown
-    viz_dropdown.change(
+    ).then(
+        # After analysis, refresh the controls based on the data
+        fn=update_viz_controls,
+        inputs=[viz_dropdown, df_state],
+        outputs=[viz_param]
+    ).then(
+        # Then render the plot
         fn=update_visualization,
-        inputs=[df_state, viz_dropdown],
+        inputs=[df_state, viz_dropdown, viz_param],
         outputs=[viz_output]
     )
-    
-    # Also update viz when analysis finishes (default view)
-    analyze_btn.click(
+
+    # 2. When Visualization Type Changes
+    viz_dropdown.change(
+        fn=update_viz_controls,
+        inputs=[viz_dropdown, df_state],
+        outputs=[viz_param]
+    ).then(
         fn=update_visualization,
-        inputs=[df_state, viz_dropdown],
+        inputs=[df_state, viz_dropdown, viz_param],
+        outputs=[viz_output]
+    )
+
+    # 3. When Sub-Option (Label/Sentiment) Changes
+    viz_param.change(
+        fn=update_visualization,
+        inputs=[df_state, viz_dropdown, viz_param],
         outputs=[viz_output]
     )
 
