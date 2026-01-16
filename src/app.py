@@ -17,10 +17,10 @@ import google.generativeai as genai
 from collections import defaultdict
 from dotenv import load_dotenv
 import os
+from huggingface_hub import hf_hub_download
 
 load_dotenv()
 
-# This check is not provided in your code but is good practice
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     st.error("GEMINI_API_KEY not found. Please add it to your .env file.")
@@ -34,19 +34,35 @@ st.set_page_config(page_title="Play Store Review Analyzer", page_icon="📱", la
 @st.cache_resource
 def load_resources():
     try:
-        mlb = joblib.load("Models/ensemble_models/multilabel_binarizer.pkl")
-        ensemble = joblib.load("Models/ensemble_models/ensemble_model.pkl")
-        tfidf = joblib.load("Models/ensemble_models/tfidf.pkl")
-        tokenizer = AutoTokenizer.from_pretrained("Models/roberta_tokenizer")
+        # --- 1. Download Custom Helper Models from YOUR Hub ---
+        # Note: We assume the 'Models' folder contents are at the root of your HF repo.
+        # If your HF repo structure is different, adjust the 'filename' argument.
+        
+        repo_id = "ssaha007/playstore-models"
+        
+        # Download paths
+        mlb_path = hf_hub_download(repo_id=repo_id, filename="ensemble_models/multilabel_binarizer.pkl")
+        ensemble_path = hf_hub_download(repo_id=repo_id, filename="ensemble_models/ensemble_model.pkl")
+        tfidf_path = hf_hub_download(repo_id=repo_id, filename="ensemble_models/tfidf.pkl")
+        weights_path = hf_hub_download(repo_id=repo_id, filename="sentiment_model/best_model_state.bin")
+
+        # Load them
+        mlb = joblib.load(mlb_path)
+        ensemble = joblib.load(ensemble_path)
+        tfidf = joblib.load(tfidf_path)
+        
+        # --- 2. Load Base Tokenizer & Architecture ---
+        # We use the standard Hugging Face "roberta-base" for the structure/config
+        tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 
         class Sentiment_Classifier(nn.Module):
             def __init__(self, n_classes):
                 super(Sentiment_Classifier, self).__init__()
-                self.roberta = AutoModel.from_pretrained("Models/roberta_base")
+                self.roberta = AutoModel.from_pretrained("roberta-base")
                 
+                # Freeze/Unfreeze layers as per your training logic
                 for param in self.roberta.parameters():
                     param.requires_grad = False
-
                 for layer in self.roberta.encoder.layer[-2:]:
                     for param in layer.parameters():
                         param.requires_grad = True
@@ -57,22 +73,21 @@ def load_resources():
             def forward(self, input_ids, attention_mask):
                 output = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
                 pooled_output = output.last_hidden_state[:, 0, :]
-                output = self.drop(pooled_output )
+                output = self.drop(pooled_output)
                 output = self.out(output)
                 return output
     
         model = Sentiment_Classifier(n_classes = 2)
 
-
-        model.load_state_dict(torch.load("Models/sentiment_model/best_model_state.bin", map_location="cpu", weights_only=True))
+        # --- 3. Load YOUR Custom Weights ---
+        # This overwrites the generic roberta-base weights with your fine-tuned ones
+        model.load_state_dict(torch.load(weights_path, map_location="cpu"))
         model.eval()
         
         return mlb, ensemble, tfidf, tokenizer, model
-    except FileNotFoundError as e:
-        st.error(f"Model file not found: {e.filename}. Please ensure all model files are in the correct directory.")
-        st.stop()
+
     except Exception as e:
-        st.error(f"An error occurred while loading resources: {e}")
+        st.error(f"An error occurred while loading resources from Hugging Face: {e}")
         st.stop()
 
 
@@ -273,7 +288,6 @@ def main():
     st.title("Play Store Review Analyzer 📱")
 
     # --- FIX 1: Initialize session state for suggestions ---
-    # This ensures the key exists across all reruns.
     if 'review_df' not in st.session_state:
         st.session_state['review_df'] = pd.DataFrame()
     if 'gemini_suggestions' not in st.session_state:
@@ -333,7 +347,6 @@ def main():
                     if label_to_reviews:
                         st.session_state['gemini_suggestions'] = generate_gemini_suggestions(label_to_reviews)
                     else:
-                        # Use an empty dictionary to show analysis ran but found nothing to suggest
                         st.session_state['gemini_suggestions'] = {}
             
             except Exception as e:
@@ -356,7 +369,7 @@ def main():
                 for label, suggestion in suggestions.items():
                     with st.expander(f"Suggestions for: **{label.title()}**"):
                         st.markdown(suggestion)
-            elif suggestions is not None: # This means suggestions were generated but were empty ({})
+            elif suggestions is not None: 
                 st.info("No actionable negative reviews found to generate suggestions.")
 
         else:

@@ -1,0 +1,7 @@
+.env
+.ipynb_checkpoints/
+score.py
+.venv/
+test.py
+Models/
+update_local_model.py
