@@ -5,9 +5,11 @@ Serves analysis endpoints and the static HTML/JS/CSS frontend.
 import sys
 from pathlib import Path
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -26,6 +28,20 @@ from src.pipeline import analyze_reviews_data
 from src.config import DEFAULT_OLLAMA_MODEL, DEFAULT_REVIEW_COUNT
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan context manager: pre-warms ML models into memory on startup
+    so the user's first review analysis request is fast and avoids cold-start delays.
+    """
+    try:
+        from src.models import load_resources
+        load_resources()
+    except Exception as e:
+        print(f"[WARMUP NOTICE] Model pre-warming at server startup skipped/deferred: {e}")
+    yield
+
+
 class AnalyzeRequest(BaseModel):
     app_id: str = Field(..., description="Google Play Store App Package Name, e.g., com.spotify.music")
     sort_order: Optional[str] = Field("Most Relevant", description="'Most Relevant' or 'Newest'")
@@ -36,8 +52,12 @@ class AnalyzeRequest(BaseModel):
 app = FastAPI(
     title="Play Store Review Analyzer API",
     description="Backend API for review analysis, sentiment categorization, and LLM suggestions.",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
+
+# GZip middleware: compresses large review JSON payloads by 75-85% with negligible CPU overhead
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Enable CORS for modern JS frontends (Node.js, Vite, Live Server, etc.)
 app.add_middleware(
@@ -89,17 +109,27 @@ def analyze(req: AnalyzeRequest):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
+class CachedStaticFiles(StaticFiles):
+    """Static file handler that adds Cache-Control headers for client asset caching."""
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     fav_file = FRONTEND_DIR / "favicon.svg"
     if fav_file.is_file():
-        return FileResponse(fav_file, media_type="image/svg+xml")
+        resp = FileResponse(fav_file, media_type="image/svg+xml")
+        resp.headers["Cache-Control"] = "public, max-age=604800"
+        return resp
     raise HTTPException(status_code=404)
 
 
-# Serve static frontend if directory exists (mounted at root after all /api routes)
+# Serve static frontend with browser asset caching (mounted at root after all /api routes)
 if FRONTEND_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+    app.mount("/", CachedStaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):

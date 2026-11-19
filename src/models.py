@@ -125,6 +125,7 @@ class ModelBundle:
             return results
 
         valid_texts = [texts[i] for i in valid_indices]
+        _infer_ctx = getattr(torch, "inference_mode", torch.no_grad)
         for i in range(0, len(valid_texts), batch_size):
             batch = valid_texts[i:i + batch_size]
             encoded = self.tokenizer(
@@ -134,10 +135,10 @@ class ModelBundle:
                 return_tensors="pt",
                 max_length=MAX_SEQUENCE_LENGTH
             )
-            with torch.no_grad():
+            with _infer_ctx():
                 outputs = self.sentiment_model(encoded["input_ids"], encoded["attention_mask"])
-                probs = self.softmax(outputs)
-                preds = torch.argmax(probs, dim=1).tolist()
+                # Direct argmax on raw logits: monotonic equivalence eliminates redundant Softmax exponential math
+                preds = torch.argmax(outputs, dim=1).tolist()
                 for j, p in enumerate(preds):
                     global_idx = valid_indices[i + j]
                     results[global_idx] = "Positive" if p == 1 else "Negative"
@@ -174,6 +175,16 @@ def load_resources() -> ModelBundle:
             state_dict = torch.load(weights_path, map_location="cpu")
         sentiment_model.load_state_dict(state_dict)
         sentiment_model.eval()
+
+        # Dynamic INT8 quantization for CPU linear layers: reduces memory bandwidth & accelerates transformer inference
+        try:
+            if hasattr(torch.quantization, "quantize_dynamic"):
+                sentiment_model = torch.quantization.quantize_dynamic(
+                    sentiment_model, {nn.Linear}, dtype=torch.qint8
+                )
+        except Exception as q_err:
+            import logging
+            logging.getLogger(__name__).debug("Dynamic quantization deferred: %s", q_err)
 
         _GLOBAL_MODEL_BUNDLE = ModelBundle(mlb, ensemble, tfidf, tokenizer, sentiment_model)
         return _GLOBAL_MODEL_BUNDLE

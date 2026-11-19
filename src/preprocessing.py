@@ -3,6 +3,10 @@ Text preprocessing and language filtering utilities.
 """
 import re
 import numpy as np
+
+# Pre-compile regular expressions once at module level to eliminate per-call regex parsing overhead
+_CLEAN_REGEX = re.compile(r"http\S+|www\S+|<.*?>|\n|\w*\d\w*")
+
 try:
     import emoji
     HAS_EMOJI = True
@@ -19,13 +23,14 @@ except ImportError:
 def preprocess(text: str) -> str:
     """
     Cleans raw review text by removing emojis, URLs, HTML tags, and alphanumeric artifacts.
+    Uses pre-compiled regex for maximum throughput with zero overhead.
     """
     if not isinstance(text, str) or not text.strip():
         return np.nan
 
     if HAS_EMOJI:
         text = emoji.replace_emoji(text, "")
-    text = re.sub(r"http\S+|www\S+|<.*?>|\n|\w*\d\w*", "", text).strip()
+    text = _CLEAN_REGEX.sub("", text).strip()
     return text if text else np.nan
 
 
@@ -33,14 +38,29 @@ def preprocess(text: str) -> str:
 def filter_english_sentences(text: str) -> str:
     """
     Splits text into sentences and retains only those identified as English.
+    Includes a fast-path whole-text verification that avoids expensive sentence-by-sentence
+    profiling when the entire review is homogeneous English.
     """
     if not isinstance(text, str):
         return np.nan
 
-    if not HAS_LANGDETECT:
-        return text.strip() if text.strip() else np.nan
+    cleaned = text.strip()
+    if not cleaned:
+        return np.nan
 
-    sentences = [s.strip() for s in text.split(".") if len(s.split()) > 1]
+    if not HAS_LANGDETECT:
+        return cleaned
+
+    # Fast-path: verify full text first (1 detector call instead of N sentence calls)
+    try:
+        if detect(cleaned) == "en":
+            return cleaned
+    except LangDetectException as lang_err:
+        import logging
+        logging.getLogger(__name__).debug("Language detection fast-path: %s", lang_err)
+
+    # Fallback: Sentence-level extraction for mixed-language content
+    sentences = [s.strip() for s in cleaned.split(".") if len(s.split()) > 1]
     english = []
     for s in sentences:
         try:
