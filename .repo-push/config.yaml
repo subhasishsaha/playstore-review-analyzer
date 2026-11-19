@@ -10,7 +10,7 @@ pre_push:
 targets:
   - name: origin
     platform: github
-    url: https://github.com/subhasishsaha/sentiment-analysis.git
+    url: https://github.com/subhasishsaha/playstore-review-analyzer.git
     branch: main
     push_tags: true
     exclude:
