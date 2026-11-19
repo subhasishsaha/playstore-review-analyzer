@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/subhasishsaha/repo-push-skill/main/schemas/repo-push-actions.schema.json
+version: "1.0"
+
+actions:
+  - name: ci
+    platforms: [github]
+    description: "Run automated unittest suite across Python 3.10, 3.11, and 3.12 on push and PR to main"
+
+  - name: docker-publish
+    platforms: [github]
+    description: "Build and push production Docker container image to Docker Hub using Buildx, GitHub Actions cache, and repository secrets on push to main or release tags"
