@@ -39,7 +39,10 @@ class SentimentClassifier(nn.Module):
     """
     def __init__(self, n_classes: int = 2):
         super().__init__()
-        self.roberta = AutoModel.from_pretrained(BASE_ROBERTA_MODEL)
+        try:
+            self.roberta = AutoModel.from_pretrained(BASE_ROBERTA_MODEL, local_files_only=True)
+        except Exception:
+            self.roberta = AutoModel.from_pretrained(BASE_ROBERTA_MODEL)
         for param in self.roberta.parameters():
             param.requires_grad = False
         for layer in self.roberta.encoder.layer[-2:]:
@@ -166,7 +169,10 @@ def load_resources() -> ModelBundle:
         ensemble = joblib.load(ensemble_path)
         tfidf = joblib.load(tfidf_path)
 
-        tokenizer = AutoTokenizer.from_pretrained(BASE_ROBERTA_MODEL)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(BASE_ROBERTA_MODEL, local_files_only=True)
+        except Exception:
+            tokenizer = AutoTokenizer.from_pretrained(BASE_ROBERTA_MODEL)
 
         sentiment_model = SentimentClassifier(n_classes=2)
         try:
