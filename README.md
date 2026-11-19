@@ -71,11 +71,32 @@ For an exhaustive breakdown of individual modules, see [docs/PROJECT_STRUCTURE.m
 
 ## 🚀 Quick Start
 
-### 1. Local Python Setup
+### 1. Docker Compose Setup (Recommended)
+
+Run the full stack—FastAPI backend, pre-warmed ML inference, pure JS dashboard, and Ollama with automated model pre-pulling—in isolated containers:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/subhasishsaha/sentiment-analysis.git
+git clone https://github.com/subhasishsaha/playstore-review-analyzer.git
+cd playstore-review-analyzer
+
+# 2. Launch FastAPI web app and Ollama with persistent model caching
+docker compose up -d
+
+# 3. View startup and initialization logs
+docker compose logs -f
+```
+
+- Open **`http://localhost:8000`** in your browser to access the dashboard.
+- Models are persisted in the `playstore_ollama_models` Docker volume across restarts.
+
+---
+
+### 2. Local Python Setup
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/subhasishsaha/playstore-review-analyzer.git
 cd playstore-review-analyzer
 
 # 2. Create and activate a virtual environment
@@ -100,7 +121,7 @@ Visit **`http://localhost:8000/docs`** for interactive OpenAPI / Swagger API doc
 
 ---
 
-### 2. Optional: Run Frontend via Node.js
+### 3. Optional: Run Frontend via Node.js
 
 You can also run the frontend independently using the zero-dependency Node.js server:
 
