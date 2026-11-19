@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/subhasishsaha/repo-push-skill/main/schemas/repo-push.schema.json
+version: "1.0"
+
+require_confirmation: true
+
+pre_push:
+  require_all_gates: true
+  dry_run: true
+
+targets:
+  - name: origin
+    platform: github
+    url: https://github.com/subhasishsaha/sentiment-analysis.git
+    branch: main
+    push_tags: true
+    exclude:
+      - .gitlab-ci.yml
+      - bitbucket-pipelines.yml
+
+  - name: space
+    platform: huggingface
+    url: https://huggingface.co/spaces/ssaha007/playstore-review-analyzer
+    branch: main
+    push_tags: false
+    exclude:
+      - .github/
+      - .gitlab-ci.yml
+      - bitbucket-pipelines.yml
+      - tests/
+    metadata:
+      title: "Playstore Review Analyzer"
+      emoji: "🚀"
+      colorFrom: "indigo"
+      colorTo: "purple"
+      sdk: "gradio"
+      app_file: "src/app.py"
+      pinned: false
+    lfs_patterns:
+      - "*.safetensors"
+      - "*.bin"
+      - "*.onnx"

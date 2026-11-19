@@ -1,7 +1,39 @@
+# Environment & Secrets
 .env
-.ipynb_checkpoints/
-score.py
+.env.local
+
+# Virtual Environment
 .venv/
-test.py
-Models/
-update_local_model.py
+env/
+venv/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter & Notebook Checkpoints
+.ipynb_checkpoints/
+
+# ML Models (track .gitkeep only)
+Models/*
+!Models/.gitkeep
+
+# Operational & Local Utility Scripts
+scripts/score.py
+scripts/update_local_model.py
+
+# Audit & Agent Temporary Artifacts
+.audit/
+.agents/
+.memory/
+.repo-push/.scratch/
+
+# OS-specific Files
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,19 @@
+{
+  "name": "playstore-review-analyzer-ui",
+  "version": "2.0.0",
+  "description": "Python-independent modern HTML/CSS/JS frontend for Play Store Review Analyzer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "nlp",
+    "playstore",
+    "review-analyzer",
+    "dashboard",
+    "sentiment-analysis"
+  ],
+  "author": "Subhasish Saha",
+  "license": "MIT"
+}
