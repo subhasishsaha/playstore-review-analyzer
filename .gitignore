@@ -37,3 +37,6 @@ scripts/update_local_model.py
 .DS_Store
 Thumbs.db
 *.log
+
+
+Review/
