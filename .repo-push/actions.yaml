@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/subhasishsaha/repo-push-skill/main/schemas/repo-push-actions.schema.json
+version: "1.0"
+
+actions:
+  - name: sync-space
+    platforms: [huggingface]
+    description: "Deploy and synchronize Gradio ZeroGPU space on Hugging Face Spaces"

@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/subhasishsaha/repo-push-skill/main/schemas/repo-push.schema.json
+version: "1.0"
+
+require_confirmation: true
+
+pre_push:
+  require_all_gates: true
+  dry_run: true
+
+targets:
+  - name: space
+    platform: huggingface
+    url: https://huggingface.co/spaces/ssaha007/playstore-app-analyzer
+    branch: main
+    push_tags: false
+    exclude:
+      - .gitlab-ci.yml
+      - bitbucket-pipelines.yml
+    metadata:
+      title: "Play Store Review Analyzer"
+      emoji: "📱"
+      colorFrom: "indigo"
+      colorTo: "purple"
+      sdk: "gradio"
+      app_file: "app.py"
+      pinned: false
+    lfs_patterns:
+      - "*.safetensors"
+      - "*.bin"
+      - "*.onnx"
+      - "*.pkl"
